@@ -161,6 +161,14 @@ def call_openai_json(system_prompt: str, user_prompt: str, model: str = "gpt-4o-
 
 def call_qwen_json(system_prompt: str, user_prompt: str) -> Dict:
     """调用通义千问 API，要求返回 JSON"""
+    # 检查必要的配置
+    if not DASHSCOPE_API_KEY:
+        print("[ERROR] 未配置 DASHSCOPE_API_KEY")
+        sys.exit(1)
+
+    model = QWEN_MODEL if QWEN_MODEL else "qwen-plus"
+    print(f"[INFO] 使用通义千问模型: {model}")
+
     url = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {DASHSCOPE_API_KEY}",
@@ -171,7 +179,7 @@ def call_qwen_json(system_prompt: str, user_prompt: str) -> Dict:
     combined_prompt = f"{system_prompt}\n\n{user_prompt}"
 
     payload = {
-        "model": QWEN_MODEL,
+        "model": model,
         "messages": [
             {"role": "user", "content": combined_prompt}
         ],
@@ -179,11 +187,18 @@ def call_qwen_json(system_prompt: str, user_prompt: str) -> Dict:
     }
 
     try:
+        print(f"[DEBUG] 请求 URL: {url}")
+        print(f"[DEBUG] 请求 model: {payload['model']}")
         resp = requests.post(url, headers=headers, json=payload, timeout=60)
+        print(f"[DEBUG] 响应状态码: {resp.status_code}")
         resp.raise_for_status()
         data = resp.json()
         content = data["choices"][0]["message"]["content"]
         return json.loads(content)
+    except requests.exceptions.HTTPError as e:
+        print(f"[ERROR] 通义千问 API HTTP 错误: {e}")
+        print(f"[DEBUG] 响应内容: {resp.text}")
+        sys.exit(1)
     except Exception as e:
         print(f"[ERROR] 通义千问 API 调用失败: {e}")
         print(f"[DEBUG] 响应内容: {resp.text if 'resp' in locals() else 'No response'}")
