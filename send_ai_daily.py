@@ -17,7 +17,7 @@ import base64
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict
 
 import requests
 import feedparser
@@ -259,33 +259,145 @@ def score_entries(entries: List[Dict]) -> List[Dict]:
 # ==================== 日报生成阶段 ====================
 def generate_daily_report(top_entries: List[Dict]) -> Dict:
     """使用 LLM 生成日报内容"""
-    system_prompt = """你是一名企业内部 AI 日报编辑，负责将技术动态转化为对不同角色的实用洞察。
+    system_prompt = """你是企业内部"AI 日报"总编辑。读者是混合团队：老板、市场总监、项目经理、售前、算法、前端、后端、UI、测试、测绘。
+你必须输出严格 JSON（不要 markdown、不要解释、不要多余文本）。
+写作风格：少废话、强结论、可行动；禁止营销语、禁止感叹号、禁止"可关注/有一定帮助"等空话。
+长度目标：整体内容约 200~280 个中文字符（不含 URL）。"""
 
-你需要输出严格 JSON，包含以下字段：
-- headline: 一句话标题（20字内）
-- changes: 技术变化要点（数组，2~3条）
-- impacts: 对 10 个角色的影响（每个角色 1 句话）
-  - boss: 老板
-  - market: 市场
-  - pm: 产品经理
-  - presales: 售前
-  - algo: 算法工程师
-  - frontend: 前端工程师
-  - backend: 后端工程师
-  - ui: UI设计师
-  - qa: 测试工程师
-  - surveying: 项目经理
-- action: 建议动作（枚举：🧪试点 / 👀观察 / ❌忽略）
-- action_detail: 动作细节（1~2句话）
-- sources: 来源数组 [{title, link}]
+    today = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
 
-只返回 JSON，不要其他文字。"""
+    user_prompt = f"""基于以下 Top 3 RSS 条目，生成一张"终版 AI 日报卡片"的 JSON（中文），结构必须完全符合下面的 JSON 契约。
 
-    user_prompt = f"""请基于以下 {len(top_entries)} 条内容生成今日 AI 日报：
+【Top 3 条目】
+{json.dumps(top_entries, ensure_ascii=False, indent=2)}
 
-{json.dumps(top_entries, ensure_ascii=False, indent=2)}"""
+【JSON 契约】
+{{
+  "date": "{today}",
+  "theme": "今日主题一句话（发生了什么 + 为什么重要）",
+  "decision": {{
+    "level": "值得关注|需要试点|暂不行动",
+    "reason": "≤15字原因"
+  }},
+  "core_changes": ["1条为佳，最多2条（主角变化，非背景）"],
+  "related": ["0-2条可选（补充信息）"],
+  "impacts": {{
+    "business": {{
+      "boss": "一句话判断价值/风险",
+      "market": "一句话影响对外叙事/方案",
+      "pm": "一句话影响交付/评估"
+    }},
+    "tech": {{
+      "algo": "一句话影响模型/Agent设计",
+      "frontend": "一句话影响交互/展示",
+      "backend": "一句话影响架构/日志/成本",
+      "qa": "一句话影响测试/定位"
+    }},
+    "delivery": {{
+      "ui": "一句话影响设计依据/反馈",
+      "presales": "一句话影响方案可信度/说服力",
+      "surveying": "一句话影响标注/质检/交付透明度"
+    }}
+  }},
+  "action": {{
+    "label": "🧪建议试点|👀持续观察|❌可忽略",
+    "detail": "建议：由谁在什么场景验证什么"
+  }},
+  "sources": [{{"title": "...", "link": "..."}}]
+}}
 
-    return call_llm_json(system_prompt, user_prompt)
+【硬约束】
+- impacts 每个字段都必须有内容；如果暂无明显影响，写"暂无明显影响"
+- core_changes 不要超过2条；related 允许为空数组
+- sources 必须来自 Top 3 条目的 title/link，最多3条
+- 不允许出现"可关注/有一定帮助/值得一提"等空句
+- theme 要体现"变化本身 + 业务价值"，不要泛泛而谈"""
+
+    report = call_llm_json(system_prompt, user_prompt)
+    return validate_and_fix_report(report)
+
+
+def validate_and_fix_report(report: Dict) -> Dict:
+    """校验并修复日报 JSON 结构，确保字段完整"""
+    # 默认值
+    default_report = {
+        "date": datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d"),
+        "theme": "AI 技术动态",
+        "decision": {"level": "持续观察", "reason": "待进一步评估"},
+        "core_changes": [],
+        "related": [],
+        "impacts": {
+            "business": {
+                "boss": "暂无明显影响",
+                "market": "暂无明显影响",
+                "pm": "暂无明显影响"
+            },
+            "tech": {
+                "algo": "暂无明显影响",
+                "frontend": "暂无明显影响",
+                "backend": "暂无明显影响",
+                "qa": "暂无明显影响"
+            },
+            "delivery": {
+                "ui": "暂无明显影响",
+                "presales": "暂无明显影响",
+                "surveying": "暂无明显影响"
+            }
+        },
+        "action": {"label": "👀持续观察", "detail": "建议：持续关注相关动态"},
+        "sources": []
+    }
+
+    # 合并默认值
+    for key, default_value in default_report.items():
+        if key not in report:
+            report[key] = default_value
+            print(f"[WARN] 缺失字段 {key}，使用默认值")
+
+    # 校验并修复 impacts
+    if "impacts" in report:
+        for group in ["business", "tech", "delivery"]:
+            if group not in report["impacts"]:
+                report["impacts"][group] = default_report["impacts"][group]
+            else:
+                for role, default_text in default_report["impacts"][group].items():
+                    if role not in report["impacts"][group] or not report["impacts"][group][role]:
+                        report["impacts"][group][role] = default_text
+
+    # 校验并修复 decision
+    if "decision" not in report or not isinstance(report["decision"], dict):
+        report["decision"] = default_report["decision"]
+    else:
+        if "level" not in report["decision"]:
+            report["decision"]["level"] = "持续观察"
+        if "reason" not in report["decision"]:
+            report["decision"]["reason"] = "待进一步评估"
+
+    # 截断 core_changes（最多2条）
+    if "core_changes" in report and isinstance(report["core_changes"], list):
+        report["core_changes"] = report["core_changes"][:2]
+
+    # 截断 related（最多2条）
+    if "related" in report and isinstance(report["related"], list):
+        report["related"] = report["related"][:2]
+    else:
+        report["related"] = []
+
+    # 截断 sources（最多3条）
+    if "sources" in report and isinstance(report["sources"], list):
+        report["sources"] = report["sources"][:3]
+
+    # 校验 action
+    if "action" not in report or not isinstance(report["action"], dict):
+        report["action"] = default_report["action"]
+    else:
+        if "label" not in report["action"]:
+            report["action"]["label"] = "👀持续观察"
+        if "detail" not in report["action"]:
+            report["action"]["detail"] = "建议：持续关注相关动态"
+
+    print(f"[INFO] 日报结构校验完成")
+    return report
 
 
 # ==================== 飞书推送 ====================
@@ -306,63 +418,119 @@ def send_to_feishu(report: Dict):
         ).digest()
         sign = base64.b64encode(hmac_code).decode("utf-8")
 
-    # 构建 impacts 列表
-    impacts_text = ""
-    for role, desc in report["impacts"].items():
-        role_name = {
-            "boss": "老板",
-            "market": "市场",
-            "pm": "产品经理",
-            "presales": "售前",
-            "algo": "算法工程师",
-            "frontend": "前端工程师",
-            "backend": "后端工程师",
-            "ui": "UI设计师",
-            "qa": "测试工程师",
-            "surveying": "项目经理"
-        }.get(role, role)
-        impacts_text += f"**{role_name}**: {desc}\n"
+    # 构建 impacts 分组列表（按终版模板：业务/技术/交付）
+    impacts = report.get("impacts", {})
+
+    # 🎯 业务 / 决策层
+    business_impacts = impacts.get("business", {})
+    business_text = f"**老板**: {business_impacts.get('boss', '暂无明显影响')}\n"
+    business_text += f"**市场**: {business_impacts.get('market', '暂无明显影响')}\n"
+    business_text += f"**产品经理**: {business_impacts.get('pm', '暂无明显影响')}"
+
+    # 🧠 技术实现层
+    tech_impacts = impacts.get("tech", {})
+    tech_text = f"**算法工程师**: {tech_impacts.get('algo', '暂无明显影响')}\n"
+    tech_text += f"**前端工程师**: {tech_impacts.get('frontend', '暂无明显影响')}\n"
+    tech_text += f"**后端工程师**: {tech_impacts.get('backend', '暂无明显影响')}\n"
+    tech_text += f"**测试工程师**: {tech_impacts.get('qa', '暂无明显影响')}"
+
+    # 🎨 体验与交付层
+    delivery_impacts = impacts.get("delivery", {})
+    delivery_text = f"**UI设计师**: {delivery_impacts.get('ui', '暂无明显影响')}\n"
+    delivery_text += f"**售前**: {delivery_impacts.get('presales', '暂无明显影响')}\n"
+    delivery_text += f"**项目经理**: {delivery_impacts.get('surveying', '暂无明显影响')}"
+
+    # 构建 core_changes 列表
+    core_changes = report.get("core_changes", [])
+    changes_text = "\n".join([f"• {c}" for c in core_changes]) if core_changes else "暂无"
+
+    # 构建 related 列表
+    related = report.get("related", [])
+    related_text = "\n".join([f"• {r}" for r in related]) if related else ""
 
     # 构建 sources 列表
+    sources = report.get("sources", [])
     sources_text = ""
-    for idx, src in enumerate(report["sources"], 1):
-        sources_text += f"{idx}. [{src['title']}]({src['link']})\n"
+    for idx, src in enumerate(sources, 1):
+        sources_text += f"{idx}. [{src.get('title', '未知来源')}]({src.get('link', '#')})\n"
+    if not sources_text:
+        sources_text = "暂无来源"
 
-    # 构建 changes 列表
-    changes_text = "\n".join([f"• {c}" for c in report["changes"]])
+    # 获取决策提示
+    decision = report.get("decision", {})
+    decision_level = decision.get("level", "持续观察")
+    decision_reason = decision.get("reason", "待进一步评估")
+
+    # 获取行动建议
+    action = report.get("action", {})
+    action_label = action.get("label", "👀持续观察")
+    action_detail = action.get("detail", "建议：持续关注相关动态")
+
+    # 构建卡片元素列表
+    elements = [
+        # 今日主题
+        {
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": f"**📌 今日主题**\n{report.get('theme', 'AI 技术动态')}"}
+        },
+        {"tag": "hr"},
+        # 决策提示
+        {
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": f"**⚡ 决策提示**: {decision_level}\n💡 {decision_reason}"}
+        },
+        {"tag": "hr"},
+        # 核心技术变化
+        {
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": f"**🔧 核心技术变化**\n{changes_text}"}
+        }
+    ]
+
+    # 相关补充（可选）
+    if related_text:
+        elements.append({"tag": "hr"})
+        elements.append({
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": f"**📎 相关补充**\n{related_text}"}
+        })
+
+    # 角色影响速览（分组）
+    elements.extend([
+        {"tag": "hr"},
+        {
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": f"**👥 角色影响速览**\n\n🎯 **业务 / 决策层**\n{business_text}"}
+        },
+        {
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": f"🧠 **技术实现层**\n{tech_text}"}
+        },
+        {
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": f"🎨 **体验与交付层**\n{delivery_text}"}
+        },
+        {"tag": "hr"},
+        # 行动建议
+        {
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": f"**🚀 行动建议**: {action_label}\n{action_detail}"}
+        },
+        {"tag": "hr"},
+        # 来源
+        {
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": f"**📚 来源**\n{sources_text}"}
+        }
+    ])
 
     card_content = {
         "config": {"wide_screen_mode": True},
         "header": {
-            "title": {"tag": "plain_text", "content": f"📰 AI 日报 | {datetime.now().strftime('%Y-%m-%d')}"},
+            "title": {"tag": "plain_text", "content": f"📰 AI 日报 | {report.get('date', datetime.now().strftime('%Y-%m-%d'))}"},
             "template": "blue"
         },
-        "elements": [
-            {
-                "tag": "div",
-                "text": {"tag": "lark_md", "content": f"**{report['headline']}**"}
-            },
-            {"tag": "hr"},
-            {
-                "tag": "div",
-                "text": {"tag": "lark_md", "content": f"**📌 技术变化**\n{changes_text}"}
-            },
-            {"tag": "hr"},
-            {
-                "tag": "div",
-                "text": {"tag": "lark_md", "content": f"**👥 角色影响**\n{impacts_text}"}
-            },
-            {"tag": "hr"},
-            {
-                "tag": "div",
-                "text": {"tag": "lark_md", "content": f"**🎯 建议动作**: {report['action']}\n{report['action_detail']}"}
-            },
-            {"tag": "hr"},
-            {
-                "tag": "div",
-                "text": {"tag": "lark_md", "content": f"**📚 来源**\n{sources_text}"}
-            }
-        ]
+        "elements": elements
     }
 
     payload = {

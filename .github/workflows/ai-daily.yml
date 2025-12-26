@@ -2,7 +2,7 @@ name: AI Daily Report
 
 on:
   schedule:
-    - cron: '0 2 * * 1-5'
+    - cron: '7 2 * * 1-5'  # 北京时间 10:07（避开整点限流）
   workflow_dispatch:
 
 jobs:
