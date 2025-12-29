@@ -40,7 +40,7 @@ RSS_URLS_RAW = os.getenv("RSS_URLS", "")
 
 RSS_URLS = [line.strip() for line in RSS_URLS_RAW.strip().split("\n") if line.strip()]
 SENT_HASHES_FILE = Path("data/sent_hashes.txt")
-MAX_CANDIDATES = 30
+MAX_CANDIDATES = 60
 TOP_N = 3
 HOURS_WINDOW = 48
 
@@ -204,6 +204,20 @@ def call_qwen_json(system_prompt: str, user_prompt: str) -> Dict:
         print(f"[DEBUG] 响应内容: {resp.text if 'resp' in locals() else 'No response'}")
         sys.exit(1)
 
+# ==================== 评分输入压缩 ====================
+def compact_for_scoring(entries):
+    compact = []
+    for e in entries:
+        snippet = (e.get("summary") or "").strip()
+        if len(snippet) > 160:
+            snippet = snippet[:160] + "..."
+        compact.append({
+            "title": (e.get("title") or "")[:120],
+            "link": e.get("link"),
+            "published": e.get("published", ""),
+            "snippet": snippet
+        })
+    return compact
 
 # ==================== 评分阶段 ====================
 def score_entries(entries: List[Dict]) -> List[Dict]:
@@ -224,7 +238,7 @@ def score_entries(entries: List[Dict]) -> List[Dict]:
 
     user_prompt = f"""请对以下 {len(entries)} 条 RSS 条目打分：
 
-{json.dumps(entries, ensure_ascii=False, indent=2)}
+{json.dumps(compact_for_scoring(entries), ensure_ascii=False, indent=2)}
 
 返回格式：
 {{
@@ -438,7 +452,7 @@ def send_to_feishu(report: Dict):
     delivery_impacts = impacts.get("delivery", {})
     delivery_text = f"**UI设计师**: {delivery_impacts.get('ui', '暂无明显影响')}\n"
     delivery_text += f"**售前**: {delivery_impacts.get('presales', '暂无明显影响')}\n"
-    delivery_text += f"**项目经理**: {delivery_impacts.get('surveying', '暂无明显影响')}"
+    delivery_text += f"**测绘**: {delivery_impacts.get('surveying', '暂无明显影响')}"
 
     # 构建 core_changes 列表
     core_changes = report.get("core_changes", [])
