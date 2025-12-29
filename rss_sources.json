@@ -111,13 +111,6 @@
         "tags": ["enterprise", "mlops", "cloud", "deployment"]
       },
       {
-        "name": "机器之心",
-        "rss_url": "https://www.jiqizhixin.com/rss",
-        "focus": "中文 AI 资讯与产业动态",
-        "reason": "国内头部 AI 媒体，覆盖国内外 AI 技术与产业新闻，提供中国视角",
-        "tags": ["news", "china", "industry", "research"]
-      },
-      {
         "name": "AI Snake Oil",
         "rss_url": "https://www.aisnakeoil.com/feed",
         "focus": "AI 批判性思考与风险评估",
