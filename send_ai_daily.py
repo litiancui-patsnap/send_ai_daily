@@ -22,6 +22,16 @@ from typing import List, Dict
 import requests
 import feedparser
 from dateutil import parser as date_parser
+from dotenv import load_dotenv
+
+# 设置 UTF-8 输出，避免 Windows 下 GBK 编码问题
+if sys.platform == 'win32':
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+
+# 加载 .env 文件（如果存在）
+load_dotenv()
 
 
 # ==================== 配置 ====================
@@ -87,10 +97,18 @@ def fetch_rss_entries() -> List[Dict]:
     candidates = []
     sent_hashes = load_sent_hashes()
 
+    print(f"[INFO] 配置的 RSS 源数量: {len(RSS_URLS)}")
+    if not RSS_URLS:
+        print("[WARN] RSS_URLS 为空，请检查环境变量 RSS_URLS 是否已配置")
+        return []
+
     for url in RSS_URLS:
         try:
             print(f"[INFO] 抓取 RSS: {url}")
-            feed = feedparser.parse(url)
+            # 使用 requests 设置超时，避免卡死
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            feed = feedparser.parse(response.content)
             for entry in feed.entries:
                 link = entry.get("link", "")
                 if not link:
@@ -114,6 +132,12 @@ def fetch_rss_entries() -> List[Dict]:
                 })
                 if len(candidates) >= MAX_CANDIDATES:
                     break
+        except requests.Timeout:
+            print(f"[WARN] 抓取 {url} 超时(10秒)，跳过")
+            continue
+        except requests.RequestException as e:
+            print(f"[WARN] 抓取 {url} 网络错误: {e}")
+            continue
         except Exception as e:
             print(f"[WARN] 抓取 {url} 失败: {e}")
             continue
